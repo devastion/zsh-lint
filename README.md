@@ -17,6 +17,8 @@ go install github.com/devastion/zsh-lint@latest
 
 Requires `zsh` at runtime, and `shellcheck` for `--shellcheck`.
 
+For zsh completion, copy `_zsh-lint` into a directory on your `fpath`. The plugin below sets this up itself.
+
 ## Usage
 
 ```sh
@@ -76,6 +78,8 @@ For sheldon, add to `plugins.toml`:
 [plugins.zsh-lint]
 github = "devastion/zsh-lint"
 ```
+
+The plugin also adds the `_zsh-lint` completion, which works for the binary too. It registers the completion even when it's loaded after `compinit`.
 
 The function runs in a subshell, so it doesn't change options or variables in your shell. In an interactive shell it shadows a `zsh-lint` binary on `$PATH`; `command zsh-lint` runs the binary. Editors start their own process and can't see the function, so point them at `zsh-lint.zsh` or the binary.
 

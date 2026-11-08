@@ -1,0 +1,13 @@
+#compdef zsh-lint
+
+# Covers both the Go binary and zsh-lint.zsh; they take the same options.
+_arguments -S \
+  '(-f --fix -d --diff)'{-f,--fix}'[Rewrite files that need whitespace or formatting fixes]' \
+  '(-f --fix -d --diff)'{-d,--diff}'[Show what --fix would change as a unified diff]' \
+  '*'{-x,--exclude=}'[Skip files and directories whose name matches the glob]:glob: ' \
+  '--shellcheck[Also run ShellCheck with the rules that misfire on zsh excluded]' \
+  '--stdin-filename=[Name for content read from -, used in reports and for EditorConfig]:name:_files' \
+  '(-v --verbose)'{-v,--verbose}'[List files that cannot be formatted or shellchecked]' \
+  '(- *)'{-V,--version}'[Show the version]' \
+  '(- *)'{-h,--help}'[Show help]' \
+  '*:path:_files'
