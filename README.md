@@ -7,6 +7,7 @@ Linter and formatter for zsh files, built on the [mvdan.cc/sh](https://github.co
 - Style checks for zsh pitfalls: literal quotes in defaults, spaced glob alternations, braced array references
 - Subscripts keep their original spacing, so `[some-key]` never becomes `[some - key]`
 - Optional ShellCheck pass, with the rules that misfire on zsh excluded
+- A [pure zsh version](#pure-zsh-version) that uses shfmt and ShellCheck from `$PATH` and loads with plugin managers
 
 ## Install
 
@@ -42,6 +43,51 @@ space_redirects = true
 ```
 
 Otherwise the built-in style applies: 2-space indent, indented case branches, spaced output redirections, tight input redirections and arithmetic negations.
+
+## Pure zsh version
+
+`zsh-lint.zsh` runs without Go. It formats with [shfmt](https://github.com/mvdan/sh) and checks with ShellCheck, both taken from `$PATH`. It needs zsh and a shfmt with the zsh dialect (tested with zsh 5.9 and shfmt 3.14). ShellCheck is only needed for `--shellcheck`, and `diff` for `--diff`.
+
+Run the script directly:
+
+```sh
+./zsh-lint.zsh -d ~/.config/zsh
+```
+
+Or load `zsh-lint.plugin.zsh` with a plugin manager, which defines a `zsh-lint` shell function:
+
+```zsh
+# zinit
+zinit light devastion/zsh-lint
+
+# antidote, in .zsh_plugins.txt
+devastion/zsh-lint
+
+# Oh My Zsh, after cloning into $ZSH_CUSTOM/plugins/zsh-lint
+plugins=(... zsh-lint)
+
+# without a plugin manager
+source /path/to/zsh-lint/zsh-lint.plugin.zsh
+```
+
+For sheldon, add to `plugins.toml`:
+
+```toml
+[plugins.zsh-lint]
+github = "devastion/zsh-lint"
+```
+
+The function runs in a subshell, so it doesn't change options or variables in your shell. In an interactive shell it shadows a `zsh-lint` binary on `$PATH`; `command zsh-lint` runs the binary. Editors start their own process and can't see the function, so point them at `zsh-lint.zsh` or the binary.
+
+It takes the same options and prints the same messages as the Go binary, with these differences:
+
+- Formatting comes from shfmt and EditorConfig only. Without EditorConfig formatting properties, shfmt's defaults apply (tab indentation) instead of the built-in style. shfmt reads `switch_case_indent`, not `case_indent`.
+- Files are parsed as zsh unless EditorConfig sets `language_dialect`.
+- The style checks match lines of text instead of the syntax tree, so comments and here-document bodies can trigger them. There is no layout check.
+- `--diff` uses `diff -u`, which can group hunks differently.
+- `-x` patterns are zsh globs, so `(a|b)` alternation works.
+- Empty files stay empty.
+- It is slower. On a 410-file zsh config it took 18 seconds against 6 for the binary, because each file starts several shfmt and zsh processes.
 
 ## Editor integration
 
