@@ -12,6 +12,7 @@ zsh-lint() (
   emulate -L zsh
   setopt extended_glob no_unset pipe_fail warn_create_global
   zmodload zsh/mapfile zsh/system || return 2
+  zmodload -F zsh/stat b:zstat || return 2
 
   local version=v0.1.0
   local shellcheck_excludes=SC1087,SC2034,SC2053,SC2068,SC2076,SC2086,SC2128,SC2154,SC2190,SC2206,SC2207,SC2295,SC2296,SC2298,SC2299,SC2300,SC2301
@@ -83,8 +84,9 @@ Checks:
   format       shfmt
   shellcheck   with --shellcheck; files ShellCheck cannot parse are skipped
 
-Exit status: 0 when clean, 1 when problems were found, 2 on usage errors. With
---fix and -, problems go to stderr and do not affect the exit status.
+Exit status: 0 when clean, 1 when problems were found, 2 on usage errors, 127
+when a required tool is missing. With --fix and -, problems go to stderr and
+do not affect the exit status.
 EOF
 
   # --- reporting -------------------------------------------------------------
@@ -121,16 +123,103 @@ EOF
     reply=("${(@ps:\n:)${1%$nl}}")
   }
 
-  # clean strips trailing blanks from every line and trailing blank lines from
-  # the end, and ends the content with exactly one newline.
+  # clean strips trailing blanks from code lines and trailing blank lines from
+  # the end, and ends the content with exactly one newline. A line whose newline
+  # lies inside a quoted string or a here-document body keeps its blanks, and a
+  # blank escaped by a backslash is kept. This is a line scanner, not a parser:
+  # if it cannot finish with every string and here-document closed, the content
+  # is returned unchanged.
   clean() {
     if [[ -z $1 ]]; then
       REPLY=''
       return
     fi
-    local -a lines=("${(@ps:\n:)1}")
+    local -a lines=("${(@ps:\n:)1}") literal=() pending=() chars
+    local line c word body want tab=$'\t' q='' closing esc
+    local -i j n strip lit ok=1
+    for line in "$lines[@]"; do
+      if (($#pending)); then
+        body=$line
+        want=${pending[1]#*:}
+        if [[ ${pending[1]%%:*} == 1 ]]; then
+          while [[ $body == $tab* ]]; do body=${body#$tab}; done
+        fi
+        [[ $body == "$want" ]] && pending[1]=()
+        literal+=(1)
+        continue
+      fi
+      chars=("${(@s::)line}")
+      n=$#chars
+      for ((j = 1; j <= n; j++)); do
+        c=$chars[j]
+        if [[ -n $q ]]; then
+          if [[ $c == '\' && $esc == 1 ]]; then
+            ((j++))
+          elif [[ $c == $closing ]]; then
+            q=''
+          fi
+          continue
+        fi
+        case $c in
+          '\') ((j++)) ;;
+          "'")
+            q="'" closing="'" esc=0
+            ((j > 1)) && [[ $chars[j-1] == '$' ]] && esc=1
+            ;;
+          '"') q='"' closing='"' esc=1 ;;
+          '#')
+            # Not after (, which starts glob flags such as (#i).
+            if ((j == 1)) || [[ $chars[j-1] == [$blanks\;\&\|] ]]; then
+              break
+            fi
+            ;;
+          '<')
+            if [[ $chars[j+1] == '<' && $chars[j+2] != '<' ]] &&
+              [[ $chars[j-1] != '<' ]] && [[ ${line[1,j]} != *'(('* ]]; then
+              ((j += 2))
+              strip=0
+              if [[ $chars[j] == '-' ]]; then
+                strip=1
+                ((j++))
+              fi
+              while [[ $chars[j] == [$blanks] ]]; do ((j++)); done
+              word=''
+              while ((j <= n)) && [[ $chars[j] != [$blanks\;\&\|\<\>\(\)] ]]; do
+                [[ $chars[j] == [\"\'\\] ]] || word+=$chars[j]
+                ((j++))
+              done
+              ((j--))
+              if [[ -z $word ]]; then
+                ok=0
+                break
+              fi
+              pending+=("$strip:$word")
+            fi
+            ;;
+        esac
+      done
+      lit=0
+      [[ -n $q ]] && lit=1
+      literal+=($lit)
+    done
+    if ((! ok)) || [[ -n $q ]] || (($#pending)); then
+      REPLY=$1
+      return
+    fi
+    local -i k
+    local trimmed backslashes
     # Only space and tab, like Go; [[:blank:]] can match Unicode spaces.
-    lines=("${(@)lines%%[$blanks]#}")
+    for ((k = 1; k <= $#lines; k++)); do
+      ((literal[k])) && continue
+      line=$lines[k]
+      trimmed=${line%%[$blanks]#}
+      backslashes=${(M)trimmed%%\\#}
+      # Removing an escaped blank would join the next line onto this one.
+      if (($#backslashes % 2 && $#trimmed < $#line)); then
+        trimmed=${line[1,$#trimmed+1]}
+      fi
+      lines[k]=$trimmed
+    done
     while (($#lines)) && [[ -z $lines[-1] ]]; do
       lines[-1]=()
     done
@@ -172,6 +261,14 @@ EOF
     done
 
     local -i stdin=$((${operands[(Ie)-]} > 0))
+    local pattern problem_text
+    for pattern in $excludes; do
+      problem_text=$(
+        setopt local_options no_extended_glob
+        [[ '' == ${~pattern} ]] 2>&1
+      )
+      [[ -n $problem_text ]] && usage_error "invalid --exclude pattern: $pattern"
+    done
     if ((opt_fix && opt_diff)); then
       usage_error '--fix and --diff cannot be combined'
     elif ((stdin && $#operands > 1)); then
@@ -192,24 +289,50 @@ EOF
   # Prints zsh, other or none for a first line.
   line_kind() {
     case $1 in
-      '#!'*zsh* | '#compdef'* | '#autoload'*) REPLY=zsh ;;
-      '#!'*) REPLY=other ;;
+      '#compdef'* | '#autoload'*) REPLY=zsh ;;
+      '#!'*)
+        interpreter "${1#??}"
+        [[ $REPLY == zsh ]] || REPLY=other
+        ;;
       *) REPLY=none ;;
     esac
   }
 
+  # The program name a shebang runs, looking past env, its options and its
+  # variable assignments. Fields split on blanks and a carriage return, like Go.
+  interpreter() {
+    local -a fields=(${(s: :)${1//[$'\t\r']/ }})
+    REPLY=''
+    (($#fields)) || return 0
+    REPLY=${fields[1]:t}
+    [[ $REPLY == env ]] || return 0
+    REPLY=''
+    local field
+    local -i skip=0
+    for field in $fields[2,-1]; do
+      if ((skip)); then
+        skip=0
+      elif [[ $field == -[uCP] ]]; then
+        skip=1
+      elif [[ $field != -* && $field != *=* ]]; then
+        REPLY=${field:t}
+        return 0
+      fi
+    done
+  }
+
   is_zsh_candidate() { # path name
     local name=$2 zsh_name=0
-    [[ $name == *.zsh ]] && zsh_name=1
-    if ((! zsh_name)) && [[ $name != .z* && $name == *.* ]]; then
-      return 1
-    fi
     first_line "$1"
     line_kind "$REPLY"
     case $REPLY in
       zsh) return 0 ;;
       other) return 1 ;;
     esac
+    [[ $name == *.zsh ]] && zsh_name=1
+    if ((! zsh_name)) && [[ $name != .z* && $name == *.* ]]; then
+      return 1
+    fi
     ((zsh_name || ${+startup_names[$name]}))
   }
 
@@ -234,10 +357,39 @@ EOF
     (($? == 0)) && [[ -z $out ]]
   }
 
+  # Lexical cleanup like Go's filepath.Clean, so equal paths are checked once.
+  clean_path() {
+    local p=$1 seg
+    local -i abs=0
+    local -a out=()
+    [[ $p == /* ]] && abs=1
+    for seg in ${(s:/:)p}; do
+      case $seg in
+        '' | .) ;;
+        ..)
+          if (($#out)) && [[ $out[-1] != .. ]]; then
+            out[-1]=()
+          elif ((! abs)); then
+            out+=(..)
+          fi
+          ;;
+        *) out+=("$seg") ;;
+      esac
+    done
+    REPLY=${(j:/:)out}
+    if ((abs)); then
+      REPLY=/$REPLY
+    elif [[ -z $REPLY ]]; then
+      REPLY=.
+    fi
+  }
+
   add_file() {
-    ((${+seen[$1]})) && return
-    seen[$1]=1
-    files+=("$1")
+    clean_path "$1"
+    local cleaned=$REPLY
+    ((${+seen[$cleaned]})) && return
+    seen[$cleaned]=1
+    files+=("$cleaned")
   }
 
   # Joins like Go's filepath.Join for the paths a walk produces.
@@ -260,6 +412,7 @@ EOF
     local dir=$1 entry name file
     if [[ ! -r $dir || ! -x $dir ]]; then
       print -ru2 -- "zsh-lint: open $dir: permission denied"
+      ((problems++))
       return
     fi
     local -a entries=("$dir"/*(DN))
@@ -506,6 +659,30 @@ EOF
     REPLY=$result
   }
 
+  # Replaces the file that $1 resolves to with a renamed temporary file in the
+  # same directory, so the file is never left half written. A file that is not
+  # writable is refused. A file with other hard links or another owner, or one
+  # whose directory takes no temporary file, is written in place.
+  write_file() { # path content
+    local target=${1:A} tmp mode
+    local -A stat
+    [[ -w $target ]] || return 1
+    zstat -o -H stat -- "$target" 2> /dev/null || return 1
+    mode=$stat[mode]
+    if ((stat[nlink] != 1 || stat[uid] != EUID)) ||
+      ! tmp=$(command mktemp "${target:h}/.${target:t}.XXXXXX" 2> /dev/null); then
+      { print -rn -- "$2" > "$target"; } 2> /dev/null
+      return
+    fi
+    if { print -rn -- "$2" > "$tmp"; } 2> /dev/null &&
+      command chmod ${mode[-3,-1]} "$tmp" 2> /dev/null &&
+      command mv -f "$tmp" "$target" 2> /dev/null; then
+      return 0
+    fi
+    command rm -f "$tmp"
+    return 1
+  }
+
   run_paths() {
     local operand file src final summary
     (($#operands)) || operands=(.)
@@ -540,7 +717,7 @@ EOF
       final=$REPLY
       ((opt_fix)) || continue
       [[ $src == "$final" ]] && continue
-      if ! { print -rn -- "$final" > "$file"; } 2> /dev/null; then
+      if ! write_file "$file" "$final"; then
         problem "$file" 0 'could not write the file'
         continue
       fi

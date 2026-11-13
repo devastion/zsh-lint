@@ -30,7 +30,7 @@ zsh-lint functions/*            # autoload functions without a shebang
 
 Run `zsh-lint --help` for all options and checks.
 
-In a directory, a file counts as zsh when its first line is a zsh shebang, `#compdef` or `#autoload`, or when it has no shebang and is named `*.zsh` or after a zsh startup file. Hidden directories and `node_modules` are skipped.
+In a directory, a file counts as zsh when its first line is a shebang that runs zsh (directly or through `env`), `#compdef` or `#autoload`, or when it has no shebang and is named `*.zsh` or after a zsh startup file. The shebang is read before the name, so `setup.sh` with `#!/bin/zsh` counts. Hidden directories and `node_modules` are skipped. A directory that cannot be read is reported and counts as a problem (exit status 1), and the rest of the tree is still checked. An invalid `--exclude` pattern is a usage error (exit status 2).
 
 ## Formatting
 
@@ -43,6 +43,8 @@ indent_size = 2
 case_indent = true
 space_redirects = true
 ```
+
+Trailing blanks are removed only from code lines. Lines inside quoted strings and here-document bodies are left as they are, so `--fix` never changes their bytes. A blank escaped by a trailing backslash (`\ `) is kept, since removing it would join the next line onto the command. `--fix` refuses files that are not writable. It writes a temporary file next to the original and renames it over the file (or over the file a symlink points to), keeping its permission bits; ACLs and extended attributes are not copied. Files with other hard links or another owner are written in place instead. Files that do not parse keep their trailing blanks, and the Go backend's parser decides which lines are code. The pure zsh backend uses a line scanner instead, and leaves a file unchanged when it cannot finish scanning.
 
 Otherwise the built-in style applies: 2-space indent, indented case branches, spaced output redirections, tight input redirections and arithmetic negations.
 

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rogpeppe/go-internal/diff"
@@ -284,20 +286,78 @@ func (l *linter) runShellCheck(name string, content []byte) {
 	}
 }
 
-// clean strips trailing blanks from every line and trailing blank lines from
-// the end, and ends the content with exactly one newline.
+// clean strips trailing blanks from code lines and trailing blank lines from
+// the end, and ends the content with exactly one newline. A line whose newline
+// lies inside a quoted string or a here-document body keeps its blanks, a blank
+// escaped by a backslash is kept, and content that does not parse is returned
+// unchanged.
 func clean(src []byte) []byte {
 	if len(src) == 0 {
 		return src
 	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangZsh)).Parse(bytes.NewReader(src), "")
+	if err != nil {
+		return src
+	}
+	protected := literalRanges(file)
+
 	lines := strings.Split(string(src), "\n")
+	offset, next := 0, 0
 	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " \t")
+		end := offset + len(line)
+		for next < len(protected) && protected[next][1] <= uint(end) {
+			next++
+		}
+		if next == len(protected) || protected[next][0] > uint(end) {
+			lines[i] = trimBlanks(line)
+		}
+		offset = end + 1
 	}
 	for len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// trimBlanks strips trailing spaces and tabs, except one escaped by a
+// backslash: removing it would join the next line onto this one.
+func trimBlanks(line string) string {
+	trimmed := strings.TrimRight(line, " \t")
+	backslashes := len(trimmed) - len(strings.TrimRight(trimmed, `\`))
+	if backslashes%2 == 1 && len(trimmed) < len(line) {
+		return line[:len(trimmed)+1]
+	}
+	return trimmed
+}
+
+// literalRanges returns the byte ranges whose text is data rather than code,
+// quoted strings and here-document bodies, sorted and merged.
+func literalRanges(file *syntax.File) [][2]uint {
+	var ranges [][2]uint
+	add := func(n syntax.Node) {
+		ranges = append(ranges, [2]uint{n.Pos().Offset(), n.End().Offset()})
+	}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.SglQuoted, *syntax.DblQuoted:
+			add(n)
+		case *syntax.Redirect:
+			if n.Hdoc != nil {
+				add(n.Hdoc)
+			}
+		}
+		return true
+	})
+	slices.SortFunc(ranges, func(a, b [2]uint) int { return cmp.Compare(a[0], b[0]) })
+	var merged [][2]uint
+	for _, r := range ranges {
+		if last := len(merged) - 1; last >= 0 && r[0] <= merged[last][1] {
+			merged[last][1] = max(merged[last][1], r[1])
+			continue
+		}
+		merged = append(merged, r)
+	}
+	return merged
 }
 
 func splitLines(content []byte) []string {

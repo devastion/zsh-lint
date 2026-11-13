@@ -1,0 +1,107 @@
+[
+  {
+    "name": "here document body keeps blanks",
+    "source": "cat <<EOF\nkeep   \nEOF\nprint -r -- ok  \n",
+    "results": {
+      "go": {"formatted": "cat << EOF\nkeep   \nEOF\nprint -r -- ok\n"},
+      "zsh": {"formatted": "cat <<EOF\nkeep   \nEOF\nprint -r -- ok\n"}
+    }
+  },
+  {
+    "name": "quoted string keeps blanks",
+    "source": "print -r -- 'a  \nb'  \n",
+    "results": {
+      "go": {"formatted": "print -r -- 'a  \nb'\n"},
+      "zsh": {"formatted": "print -r -- 'a  \nb'\n"}
+    }
+  },
+  {
+    "name": "escaped trailing blank keeps the command split",
+    "source": "print -r -- a \\ \nprint -r -- b\n",
+    "results": {
+      "go": {"formatted": "print -r -- a \\ \nprint -r -- b\n"},
+      "zsh": {"formatted": "print -r -- a \\ \nprint -r -- b\n"}
+    }
+  },
+  {
+    "name": "glob flag is not a comment",
+    "source": "setopt extended_glob\n[[ x == (#i)y ]] || print -r -- \"a  \nb\"\nprint -r -- ok # \"\n",
+    "results": {
+      "go": {"formatted": "setopt extended_glob\n[[ x == (#i)y ]] || print -r -- \"a  \nb\"\nprint -r -- ok # \"\n"},
+      "zsh": {"formatted": "setopt extended_glob\n[[ x == (#i)y ]] || print -r -- \"a  \nb\"\nprint -r -- ok # \"\n"}
+    }
+  },
+  {
+    "name": "clean",
+    "source": "print -r -- ok\n",
+    "results": {
+      "go": {"formatted": "print -r -- ok\n"},
+      "zsh": {"formatted": "print -r -- ok\n"}
+    }
+  },
+  {
+    "name": "default indentation differs",
+    "source": "if true;then\nprint ok\nfi\n",
+    "results": {
+      "go": {"formatted": "if true; then\n  print ok\nfi\n"},
+      "zsh": {"formatted": "if true; then\n\tprint ok\nfi\n"}
+    }
+  },
+  {
+    "name": "editorconfig indentation",
+    "editorconfig": "[*]\nindent_style = space\nindent_size = 4\n",
+    "source": "if true;then\nprint ok\nfi\n",
+    "results": {
+      "go": {"formatted": "if true; then\n    print ok\nfi\n"},
+      "zsh": {"formatted": "if true; then\n    print ok\nfi\n"}
+    }
+  },
+  {
+    "name": "associative subscripts",
+    "source": "typeset -A values\nvalues[some-key]=ok\nprint -r -- ${values[some-key]}\n",
+    "results": {
+      "go": {"formatted": "typeset -A values\nvalues[some-key]=ok\nprint -r -- ${values[some-key]}\n"},
+      "zsh": {"formatted": "typeset -A values\nvalues[some-key]=ok\nprint -r -- ${values[some-key]}\n"}
+    }
+  },
+  {
+    "name": "quoted default",
+    "source": "print -r -- \"${value:-'fallback'}\"\n",
+    "results": {
+      "go": {"formatted": "print -r -- \"${value:-'fallback'}\"\n", "diagnostics": "fixture.zsh:1: single quotes in a default inside double quotes stay literal\n"},
+      "zsh": {"formatted": "print -r -- \"${value:-'fallback'}\"\n", "diagnostics": "fixture.zsh:1: single quotes in a default inside double quotes stay literal\n"}
+    }
+  },
+  {
+    "name": "braced array",
+    "source": "print -r -- \"${items[@]}\"\n",
+    "results": {
+      "go": {"formatted": "print -r -- \"${items[@]}\"\n", "diagnostics": "fixture.zsh:1: braced array reference; write \"$name[@]\"\n"},
+      "zsh": {"formatted": "print -r -- \"${items[@]}\"\n", "diagnostics": "fixture.zsh:1: braced array reference; write \"$name[@]\"\n"}
+    }
+  },
+  {
+    "name": "comment checks differ",
+    "source": "# print -r -- \"${items[@]}\"\n",
+    "results": {
+      "go": {"formatted": "# print -r -- \"${items[@]}\"\n"},
+      "zsh": {"formatted": "# print -r -- \"${items[@]}\"\n", "diagnostics": "fixture.zsh:1: braced array reference; write \"$name[@]\"\n"}
+    }
+  },
+  {
+    "name": "here document checks differ",
+    "source": "cat <<'EOF'\n\"${items[@]}\"\nEOF\n",
+    "results": {
+      "go": {"formatted": "cat << 'EOF'\n\"${items[@]}\"\nEOF\n"},
+      "zsh": {"formatted": "cat <<'EOF'\n\"${items[@]}\"\nEOF\n", "diagnostics": "fixture.zsh:2: braced array reference; write \"$name[@]\"\n"}
+    }
+  },
+  {
+    "name": "unicode",
+    "source": "print -r -- 'Здравей, свят'\n",
+    "results": {
+      "go": {"formatted": "print -r -- 'Здравей, свят'\n"},
+      "zsh": {"formatted": "print -r -- 'Здравей, свят'\n"}
+    }
+  }
+]

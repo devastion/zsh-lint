@@ -62,9 +62,14 @@ Checks:
   format       the mvdan.cc/sh formatter
   shellcheck   with --shellcheck; files ShellCheck cannot parse are skipped
 
-Exit status: 0 when clean, 1 when problems were found, 2 on usage errors. With
---fix and -, problems go to stderr and do not affect the exit status.
+Exit status: 0 when clean, 1 when problems were found, 2 on usage errors, 127
+when a required tool is missing. With --fix and -, problems go to stderr and
+do not affect the exit status.
 `
+
+// releaseVersion is the release both backends report; zsh-lint.zsh repeats it
+// and TestZshBackendConstants keeps the two equal. Bump it before tagging.
+const releaseVersion = "v0.1.0"
 
 type options struct {
 	fix, diff, verbose, shellcheck, help, version bool
@@ -165,6 +170,12 @@ func parseArgs(args []string) (options, error) {
 		}
 	}
 
+	for _, pattern := range o.excludes {
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return o, fmt.Errorf("invalid --exclude pattern: %s", pattern)
+		}
+	}
+
 	stdin := slices.Contains(o.operands, "-")
 	switch {
 	case o.fix && o.diff:
@@ -177,18 +188,26 @@ func parseArgs(args []string) (options, error) {
 	return o, nil
 }
 
+// version names the release, shared with zsh-lint.zsh, and adds the module
+// version the binary was built from when it differs, such as a commit build.
 func version() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "zsh-lint (unknown version)"
+		return "zsh-lint " + releaseVersion + " (unknown build)"
 	}
-	v := "zsh-lint " + info.Main.Version
+	var details []string
+	if build := info.Main.Version; build != "" && build != "(devel)" && build != releaseVersion {
+		details = append(details, "build "+build)
+	}
 	for _, dep := range info.Deps {
 		if dep.Path == "mvdan.cc/sh/v3" {
-			v += " (mvdan.cc/sh/v3 " + dep.Version + ")"
+			details = append(details, "mvdan.cc/sh/v3 "+dep.Version)
 		}
 	}
-	return v
+	if len(details) == 0 {
+		details = append(details, "unknown build")
+	}
+	return "zsh-lint " + releaseVersion + " (" + strings.Join(details, ", ") + ")"
 }
 
 func firstLine(path string) string {
@@ -206,25 +225,51 @@ func firstLine(path string) string {
 
 func lineKind(line string) kind {
 	switch {
-	case strings.HasPrefix(line, "#!") && strings.Contains(line, "zsh"),
-		strings.HasPrefix(line, "#compdef"),
-		strings.HasPrefix(line, "#autoload"):
+	case strings.HasPrefix(line, "#compdef"), strings.HasPrefix(line, "#autoload"):
 		return kindZsh
 	case strings.HasPrefix(line, "#!"):
+		if interpreter(line[2:]) == "zsh" {
+			return kindZsh
+		}
 		return kindOther
 	}
 	return kindNone
 }
 
-func isZshCandidate(path, name string) bool {
-	zshName := strings.HasSuffix(name, ".zsh")
-	if !zshName && !strings.HasPrefix(name, ".z") && strings.Contains(name, ".") {
-		return false
+// interpreter returns the program name a shebang runs, looking past env, its
+// options and its variable assignments.
+func interpreter(shebang string) string {
+	fields := strings.Fields(shebang)
+	if len(fields) == 0 {
+		return ""
 	}
+	name := filepath.Base(fields[0])
+	if name != "env" {
+		return name
+	}
+	skip := false
+	for _, field := range fields[1:] {
+		switch {
+		case skip:
+			skip = false
+		case field == "-u" || field == "-C" || field == "-P":
+			skip = true
+		case !strings.HasPrefix(field, "-") && !strings.Contains(field, "="):
+			return filepath.Base(field)
+		}
+	}
+	return ""
+}
+
+func isZshCandidate(path, name string) bool {
 	switch lineKind(firstLine(path)) {
 	case kindZsh:
 		return true
 	case kindOther:
+		return false
+	}
+	zshName := strings.HasSuffix(name, ".zsh")
+	if !zshName && !strings.HasPrefix(name, ".z") && strings.Contains(name, ".") {
 		return false
 	}
 	return zshName || startupNames[name]
@@ -241,9 +286,13 @@ func (l *linter) excluded(name string, dir bool) bool {
 }
 
 func (l *linter) discover(root string, add func(string)) {
+	if info, err := os.Lstat(root); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		root += string(filepath.Separator)
+	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "zsh-lint: %v\n", err)
+			l.problems++
 			return nil
 		}
 		if path != root && l.excluded(d.Name(), d.IsDir()) {
@@ -259,6 +308,7 @@ func (l *linter) discover(root string, add func(string)) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "zsh-lint: %v\n", err)
+		l.problems++
 	}
 }
 
@@ -271,6 +321,7 @@ func (l *linter) runPaths() int {
 	var files []string
 	seen := map[string]bool{}
 	add := func(path string) {
+		path = filepath.Clean(path)
 		if !seen[path] {
 			seen[path] = true
 			files = append(files, path)
@@ -304,7 +355,7 @@ func (l *linter) runPaths() int {
 		if !l.opts.fix || bytes.Equal(src, final) {
 			continue
 		}
-		if err := os.WriteFile(path, final, 0o644); err != nil {
+		if err := writeFile(path, final); err != nil {
 			l.problem(path, 0, "could not write the file: "+err.Error())
 			continue
 		}
@@ -322,6 +373,46 @@ func (l *linter) runPaths() int {
 		return 1
 	}
 	return 0
+}
+
+// writeFile replaces the file that path resolves to with a renamed temporary
+// file in the same directory, so the file is never left half written. A file
+// that is not writable is refused. A file with other hard links or another
+// owner, or one whose directory takes no temporary file, is written in place.
+func writeFile(path string, content []byte) error {
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(target, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	if !replaceable(info) {
+		return os.WriteFile(target, content, info.Mode().Perm())
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*")
+	if err != nil {
+		return os.WriteFile(target, content, info.Mode().Perm())
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), target)
 }
 
 func (l *linter) runStdin() int {
