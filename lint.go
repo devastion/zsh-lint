@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/rogpeppe/go-internal/diff"
@@ -278,12 +279,31 @@ func (l *linter) runShellCheck(name string, content []byte) {
 			return
 		}
 	}
+	lines := strings.Split(string(content), "\n")
 	for _, finding := range findings {
-		if rest, ok := strings.CutPrefix(finding, "-:"); ok {
+		rest, ok := strings.CutPrefix(finding, "-:")
+		if ok && zshArrayLoop(finding, rest, lines) {
+			continue
+		}
+		if ok {
 			finding = name + ":" + rest
 		}
 		l.report(finding)
 	}
+}
+
+// zshArrayLoop reports whether a ShellCheck SC2066 finding sits on a line that
+// loops over a zsh array expansion, which ShellCheck reads as a single string.
+func zshArrayLoop(finding, rest string, lines []string) bool {
+	if !strings.HasSuffix(finding, "[SC2066]") {
+		return false
+	}
+	number, _, _ := strings.Cut(rest, ":")
+	index, err := strconv.Atoi(number)
+	if err != nil || index < 1 || index > len(lines) {
+		return false
+	}
+	return strings.Contains(lines[index-1], "[@]") || strings.Contains(lines[index-1], "(@")
 }
 
 // clean strips trailing blanks from code lines and trailing blank lines from

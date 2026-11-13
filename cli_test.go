@@ -282,6 +282,37 @@ func TestCLI(t *testing.T) {
 					t.Fatalf("diff changed file: %q", content)
 				}
 			})
+			t.Run("skipped files hint at verbose", func(t *testing.T) {
+				dir := testWorkspace(t, "")
+				writeTestFile(t, dir, "always.zsh", "{ :; } always { :; }\n")
+				want := "Checked 1 files: 0 fixed, 1 not formattable (use -v to list them), 0 problem(s).\n"
+				assertCommandResult(t, runCLI(t, dir, "", "always.zsh"), commandResult{stdout: want})
+				got := runCLI(t, dir, "", "-v", "always.zsh")
+				if strings.Contains(got.stdout, "use -v") || !strings.Contains(got.stdout, "always.zsh: not formattable:") {
+					t.Fatalf("unexpected verbose result: %+v", got)
+				}
+			})
+			t.Run("shellcheck zsh arrays", func(t *testing.T) {
+				dir := testWorkspace(t, "")
+				src := "for char in \"${(@s::)PWD}\"; do print -r -- $char; done\n"
+				got := runCLI(t, dir, src, "--shellcheck", "--stdin-filename", "fixture.zsh", "-")
+				assertCommandResult(t, got, commandResult{})
+				src = "for item in \"$arr[@]\" \"${(k)map}\"; do print -r -- $item; done\n"
+				assertCommandResult(t, runCLI(t, dir, src, "--shellcheck", "--stdin-filename", "fixture.zsh", "-"), commandResult{})
+				src = "for item in \"$(ls)\"; do print -r -- $item; done\n"
+				got = runCLI(t, dir, src, "--shellcheck", "--stdin-filename", "fixture.zsh", "-")
+				if got.code != 1 || !strings.Contains(got.stdout, "[SC2066]") {
+					t.Fatalf("real SC2066 finding was hidden: %+v", got)
+				}
+			})
+			t.Run("unchecked files hint at verbose", func(t *testing.T) {
+				dir := testWorkspace(t, "")
+				writeTestFile(t, dir, "always.zsh", "{ :; } always { :; }\n")
+				got := runCLI(t, dir, "", "--shellcheck", "always.zsh")
+				if got.code != 0 || !strings.Contains(got.stdout, "not shellchecked (use -v to list them)") {
+					t.Fatalf("unexpected result: %+v", got)
+				}
+			})
 			t.Run("shellcheck", func(t *testing.T) {
 				dir := testWorkspace(t, "")
 				got := runCLI(t, dir, "echo $value\n", "--shellcheck", "--stdin-filename", "fixture.zsh", "-")

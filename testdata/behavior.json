@@ -103,5 +103,37 @@
       "go": {"formatted": "print -r -- 'Здравей, свят'\n"},
       "zsh": {"formatted": "print -r -- 'Здравей, свят'\n"}
     }
+  },
+  {
+    "name": "unsupported multi-variable for stays untouched",
+    "source": "for a   b in 1 2; do :; done\n",
+    "results": {
+      "go": {"formatted": "for a   b in 1 2; do :; done\n"},
+      "zsh": {"formatted": "for a   b in 1 2; do :; done\n"}
+    }
+  },
+  {
+    "name": "unsupported always block stays untouched",
+    "source": "{ :;   } always { :;   }\n",
+    "results": {
+      "go": {"formatted": "{ :;   } always { :;   }\n"},
+      "zsh": {"formatted": "{ :;   } always { :;   }\n"}
+    }
+  },
+  {
+    "name": "unsupported math function stays untouched",
+    "source": "x=$((  sqrt(4)  ))\n",
+    "results": {
+      "go": {"formatted": "x=$((  sqrt(4)  ))\n"},
+      "zsh": {"formatted": "x=$((  sqrt(4)  ))\n"}
+    }
+  },
+  {
+    "name": "unsupported uppercase zip flag stays untouched",
+    "source": "print -r --   ${a:^^b}\n",
+    "results": {
+      "go": {"formatted": "print -r --   ${a:^^b}\n"},
+      "zsh": {"formatted": "print -r --   ${a:^^b}\n"}
+    }
   }
 ]

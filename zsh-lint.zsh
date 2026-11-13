@@ -488,8 +488,19 @@ EOF
         return
       fi
     done
+    split_lines "$2"
+    local -a source_lines=("${(@)reply}")
+    local rest
+    local -i number
     for finding in $findings; do
-      [[ $finding == -:* ]] && finding=$1:${finding#-:}
+      if [[ $finding == -:* ]]; then
+        rest=${finding#-:}
+        number=${rest%%:*}
+        if [[ $finding == *'[SC2066]' && ${source_lines[number]} == *('[@]'|'(@')* ]]; then
+          continue
+        fi
+        finding=$1:$rest
+      fi
       report "$finding"
     done
   }
@@ -727,6 +738,7 @@ EOF
 
     summary="Checked $#files files: $fixed fixed, $skipped not formattable"
     ((opt_shellcheck)) && summary+=", $unchecked not shellchecked"
+    ((skipped + unchecked > 0 && !opt_verbose)) && summary+=' (use -v to list them)'
     print -ru$out_fd -- "$summary, $problems problem(s)."
     ((problems == 0))
   }

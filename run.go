@@ -63,6 +63,9 @@ func (l *linter) runPaths() int {
 	if l.opts.shellcheck {
 		summary += fmt.Sprintf(", %d not shellchecked", l.unchecked)
 	}
+	if l.skipped+l.unchecked > 0 && !l.opts.verbose {
+		summary += " (use -v to list them)"
+	}
 	fmt.Fprintf(l.out, "%s, %d problem(s).\n", summary, l.problems)
 
 	if l.problems > 0 {
